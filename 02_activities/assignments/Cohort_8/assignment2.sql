@@ -21,7 +21,11 @@ The `||` values concatenate the columns into strings.
 Edit the appropriate columns -- you're making two edits -- and the NULL rows will be fixed. 
 All the other rows will remain the same. */
 
-
+SELECT
+--- Replace NULL first column, product_name with blank, product_size with blank and product_qty_type as unit
+-- cool you can use coalesce on one line for each entity
+coalesce(product_name,' ')  || ', ' || coalesce(product_size,' ')|| ' (' || coalesce(product_qty_type, 'unit') || ')' AS product_list
+FROM product;
 
 
 --Windowed Functions
@@ -33,17 +37,95 @@ You can either display all rows in the customer_purchases table, with the counte
 each new market date for each customer, or select only the unique market dates per customer 
 (without purchase details) and number those visits. 
 HINT: One of these approaches uses ROW_NUMBER() and one uses DENSE_RANK(). */
+Drop TABLE IF EXISTS temp.customer_visit_frequency;
 
+CREATE TEMP TABLE IF NOT EXISTS temp.customer_visit_frequency
+( visit_date DATE
+,customer_id INTEGER
+);
 
+INSERT INTO TEMP.customer_visit_frequency (visit_date, customer_id)
+SELECT
+market_date
+,customer_id
+FROM customer_purchases;
+
+--row_number ranks every row separately, even customer visits or purchases on the same markert date.  The output of this QUERY is 4221 rows.
+-- SELECT
+-- 		customer_id
+-- 		,visit_date
+-- 		,ROW_NUMBER() OVER (
+-- 			PARTITION BY customer_id
+-- 			ORDER BY visit_date ASC
+-- 		) AS visit_number_row
+-- 
+-- FROM temp.customer_visit_frequency;
+
+-- dense_rank results in 2018 rows, counting unique market_date visits eliminating market multiple customer visits or purchases on the same day
+SELECT DISTINCT	
+ 		customer_id
+ 		,visit_date
+ 		,DENSE_RANK() OVER (
+ 			PARTITION BY customer_id
+ 			ORDER BY visit_date ASC
+ 		) AS visit_number
+ 
+ FROM temp.customer_visit_frequency;
+
+-- Count visits per customer
+/*SELECT
+		customer_id
+		, COUNT(DISTINCT visit_date) AS total_visits
+FROM temp.customer_visit_frequency
+GROUP BY customer_id
+ORDER By total_visits DESC
+LIMIT 5; */
+SELECT DISTINCT	
+ 		customer_id
+ 		,visit_date
+ 		,DENSE_RANK() OVER (
+ 			PARTITION BY customer_id
+ 			ORDER BY visit_date DESC
+ 		) AS visit_number
+ 
+ FROM temp.customer_visit_frequency;
 
 /* 2. Reverse the numbering of the query from a part so each customer’s most recent visit is labeled 1, 
 then write another query that uses this one as a subquery (or temp table) and filters the results to 
 only the customer’s most recent visit. */
 
+-- Rank newest to oldest using subquery
 
+SELECT*
+FROM (
+			SELECT DISTINCT	
+				customer_id
+				,visit_date
+				,DENSE_RANK() OVER (
+					PARTITION BY customer_id
+					ORDER BY visit_date DESC
+			) AS visit_number
+ 
+	FROM temp.customer_visit_frequency
+ ) x
+-- Filter most recent visits
+WHERE x.visit_number = 1
+ORDER BY visit_date DESC;
 
 /* 3. Using a COUNT() window function, include a value along with each row of the 
 customer_purchases table that indicates how many different times that customer has purchased that product_id. */
+
+-- Results in total purchases per customer for each product, however there are is a lot of redundant counts as a result of market_date
+SELECT 
+		customer_id
+		,vendor_id
+		,product_id
+		,market_date
+ 		,COUNT(product_id) OVER (
+ 			PARTITION BY customer_id, product_id
+ 		) AS total_product_purchases
+ FROM customer_purchases  
+ ORDER BY customer_id, product_id, market_date;
 
 
 
@@ -58,12 +140,36 @@ Remove any trailing or leading whitespaces. Don't just use a case statement for 
 | Habanero Peppers - Organic | Organic     |
 
 Hint: you might need to use INSTR(product_name,'-') to find the hyphens. INSTR will help split the column. */
+SELECT 
+	product_name
+	,CASE
+	
+		WHEN 
+			INSTR(product_name, '-')  >0 -- If product name contains hyphen
+	
+		THEN 
+			TRIM(SUBSTR(product_name, INSTR(product_name, '-') + 1))
+			-- SQL string index starts at  1
+			-- SUBSTR(string, start_index, length to take)
+			-- Trim and return everythign after the hyphen, indexing string with INSTR +1 for no hyphen. 
+			-- Will include hyphen in  description -- TRIM(SUBSTR(product_name, INSTR(product_name, '-')) 
+		
+		ELSE NULL
+	
+	END AS description
 
+FROM product;
 
 
 /* 2. Filter the query to show any product_size value that contain a number with REGEXP. */
 
+SELECT
+	product_name AS Product
+	,product_qty_type AS Measurement
+	,product_size AS Amount
 
+FROM product
+WHERE product_size REGEXP '[0-9]';
 
 -- UNION
 /* 1. Using a UNION, write a query that displays the market dates with the highest and lowest total sales.
@@ -74,6 +180,48 @@ HINT: There are a possibly a few ways to do this query, but if you're struggling
 "best day" and "worst day"; 
 3) Query the second temp table twice, once for the best day, once for the worst day, 
 with a UNION binding them. */
+
+-- CTE calculating total sales by market_date
+
+WITH market_sales AS (
+		
+		SELECT
+		market_date,
+		
+		--market sales agregate function to two decimal points for currency 
+		ROUND(SUM( quantity * cost_to_customer_per_qty),2 )AS sales
+		
+		FROM customer_purchases
+		GROUP BY market_date
+)
+
+--ranking sales CTE, another WITH is not needed, comma indicates second CTE
+,ranked_sales AS (
+SELECT 
+	market_date
+	,sales
+	,DENSE_RANK () OVER(
+		ORDER BY sales DESC) AS best_day
+	,DENSE_RANK () OVER(
+		ORDER BY sales ASC) AS worst_day		
+FROM market_sales
+)
+-- Query second CTE twice, once for best day, second for worst day.
+SELECT
+	market_date
+	,sales
+	,'Best Day' AS sales_day
+FROM ranked_sales
+WHERE best_day = 1
+
+UNION
+
+SELECT
+	market_date
+	,sales
+	,'Worst Day' AS sales_day
+FROM ranked_sales
+WHERE worst_day = 1;
 
 
 
@@ -91,7 +239,26 @@ Think a bit about the row counts: how many distinct vendors, product names are t
 How many customers are there (y). 
 Before your final group by you should have the product of those two queries (x*y).  */
 
+SELECT
+	vendor_name
+	,product_name
+	,SUM(sales) as sales
 
+FROM (
+		SELECT DISTINCT
+		vendor_name
+		,product_name
+		,ROUND(5*original_price,2) as sales
+		
+		FROM vendor_inventory vi
+		JOIN vendor v on v.vendor_id = vi.vendor_id
+		JOIN product p on p.product_id = vi.product_id
+		) x
+CROSS JOIN
+	(SELECT DISTINCT
+	customer_id
+	FROM customer)
+GROUP BY vendor_name, product_name;
 
 -- INSERT
 /*1.  Create a new table "product_units". 
@@ -100,17 +267,54 @@ It should use all of the columns from the product table, as well as a new column
 Name the timestamp column `snapshot_timestamp`. */
 
 
+CREATE TABLE product_units AS
+SELECT 
+p.*
+,CURRENT_TIMESTAMP AS snapshot_timestamp
+FROM product as p
+WHERE product_qty_type='unit';
+
+
+
+
 
 /*2. Using `INSERT`, add a new row to the product_units table (with an updated timestamp). 
 This can be any product you desire (e.g. add another record for Apple Pie). */
 
-
-
+INSERT INTO product_units (
+		product_id
+		,product_name
+		,product_size
+		,product_category_id
+		,product_qty_type
+		,snapshot_timestamp
+)
+		SELECT
+			product_id
+			,product_name
+			,product_size
+			,product_category_id
+			,product_qty_type
+			,CURRENT_TIMESTAMP
+		FROM  product as p
+		WHERE product_name like '%Pie%';
 -- DELETE
 /* 1. Delete the older record for the whatever product you added. 
 
 HINT: If you don't specify a WHERE clause, you are going to have a bad time.*/
 
+-- older record is min(TIMESTAMP)
+DELETE FROM product_units
+WHERE 
+		(product_name
+		,snapshot_timestamp) 
+		NOT IN (
+						SELECT product_name
+						, MAX(snapshot_timestamp)
+						FROM product_units
+					WHERE product_name like '%Pie%'
+					GROUP BY product_name
+);
 
 
 -- UPDATE
@@ -130,6 +334,18 @@ Finally, make sure you have a WHERE statement to update the right row,
 	you'll need to use product_units.product_id to refer to the correct row within the product_units table. 
 When you have all of these components, you can run the update statement. */
 
+ALTER TABLE product_units
+ADD current_quantity INT;
+
+UPDATE product_units
+--last quantity =  latest entry = top result from ORDER BY market_date DESC in vendor_inventory
+SET current_quantity = COALESCE((
+    SELECT vi.quantity
+    FROM vendor_inventory vi
+    WHERE vi.product_id = product_units.product_id
+    ORDER BY vi.market_date DESC  -- latest entry first
+    LIMIT 1                      -- take only the most recent
+), 0);  --use coalesce set to 0 if no match found
 
 
 
