@@ -54,7 +54,15 @@ The store wants to keep customer addresses. Propose two architectures for the CU
 **HINT:** search type 1 vs type 2 slowly changing dimensions. 
 
 ```
-Your answer...
+Wendy Graham, Your answer...
+Type 1 slowly changing dimensions (SDC) Overwrite, 
+-Would only require one table for customer address that can be overwritten
+-When address changes, new address overwrites old address.  No history
+
+Type 2 slowly chaning dimensions(SDC) - retains history
+- Customer table stores basic info with PK customer_id
+- Customer_address table stores addressess with tis own PK (customer_address_id) and FK customer_id 
+- A new addresss would create a new row in the customer_address table and can be GROUPED BY customer_id to show customer address history
 ```
 
 ***
